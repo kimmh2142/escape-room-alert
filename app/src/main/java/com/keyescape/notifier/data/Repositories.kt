@@ -6,18 +6,29 @@ import kotlinx.coroutines.flow.Flow
 import javax.inject.Inject
 import javax.inject.Singleton
 
-data class Branch(val id: Int, val name: String, val region: String)
+enum class Provider(val storageKey: String, val displayName: String) {
+    KEYESCAPE("KEYESCAPE", "키이스케이프");
 
-@Singleton class BranchCatalog @Inject constructor() {
+    companion object {
+        fun fromStorage(value: String): Provider? = values().firstOrNull { it.storageKey == value }
+    }
+}
+
+data class Branch(val id: Int, val name: String, val region: String, val provider: Provider)
+
+@Singleton class ProviderBranchCatalog @Inject constructor() {
     // Region labels deliberately do not infer location from a branch name.
+    // Add a future provider's explicitly mapped branches here; its API stays in a separate repository.
     val branches = listOf(
-        Branch(3, "키이스케이프 강남점", "서울 강남"), Branch(10, "키이스케이프 홍대점", "서울 홍대"),
-        Branch(14, "더오름", "서울 홍대"), Branch(16, "우주라이크", "서울 홍대"),
-        Branch(18, "메모리컴퍼니", "서울 강남"), Branch(19, "LOG_IN 1", "서울 강남"),
-        Branch(20, "LOG_IN 2", "서울 강남"), Branch(22, "STATION", "서울 강남"),
-        Branch(23, "후즈데어", "서울 강남"), Branch(9, "키이스케이프 부산점", "부산"), Branch(7, "키이스케이프 전주점", "전주")
+        Branch(3, "키이스케이프 강남점", "서울 강남", Provider.KEYESCAPE), Branch(10, "키이스케이프 홍대점", "서울 홍대", Provider.KEYESCAPE),
+        Branch(14, "더오름", "서울 강남", Provider.KEYESCAPE), Branch(16, "우주라이크", "서울 강남", Provider.KEYESCAPE),
+        Branch(18, "메모리컴퍼니", "서울 강남", Provider.KEYESCAPE), Branch(19, "LOG_IN 1", "서울 강남", Provider.KEYESCAPE),
+        Branch(20, "LOG_IN 2", "서울 강남", Provider.KEYESCAPE), Branch(22, "STATION", "서울 강남", Provider.KEYESCAPE),
+        Branch(23, "후즈데어", "서울 강남", Provider.KEYESCAPE), Branch(9, "키이스케이프 부산점", "부산", Provider.KEYESCAPE), Branch(7, "키이스케이프 전주점", "전주", Provider.KEYESCAPE)
     )
     fun regions() = branches.map { it.region }.distinct()
+    fun providers(region: String) = branches.filter { it.region == region }.map { it.provider }.distinct()
+    fun branches(region: String, provider: Provider) = branches.filter { it.region == region && it.provider == provider }
 }
 
 @Singleton class KeyescapeRepository @Inject constructor(private val api: KeyescapeApiService) {

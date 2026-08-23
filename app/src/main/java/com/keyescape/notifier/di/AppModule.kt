@@ -5,6 +5,7 @@ import com.jakewharton.retrofit2.converter.kotlinx.serialization.asConverterFact
 import com.keyescape.notifier.data.KeyescapeApiService
 import com.keyescape.notifier.data.MonitoringDao
 import com.keyescape.notifier.data.MonitoringDatabase
+import com.keyescape.notifier.data.ZeroworldApiService
 import dagger.Module
 import dagger.Provides
 import dagger.hilt.InstallIn
@@ -20,7 +21,7 @@ import android.content.Context
 
 @Module @InstallIn(SingletonComponent::class)
 object AppModule {
-    @Provides @Singleton fun database(@ApplicationContext context: Context): MonitoringDatabase = Room.databaseBuilder(context, MonitoringDatabase::class.java, "escape-notifier.db").fallbackToDestructiveMigration().build()
+    @Provides @Singleton fun database(@ApplicationContext context: Context): MonitoringDatabase = Room.databaseBuilder(context, MonitoringDatabase::class.java, "escape-notifier.db").addMigrations(MonitoringDatabase.MIGRATION_2_3, MonitoringDatabase.MIGRATION_3_4).build()
     @Provides fun monitoringDao(database: MonitoringDatabase): MonitoringDao = database.monitoringDao()
     @Provides @Singleton fun api(): KeyescapeApiService {
         val client = OkHttpClient.Builder().addInterceptor(HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BASIC }).build()
@@ -28,4 +29,7 @@ object AppModule {
         return Retrofit.Builder().baseUrl("https://www.keyescape.com/").client(client)
             .addConverterFactory(json.asConverterFactory("application/json".toMediaType())).build().create(KeyescapeApiService::class.java)
     }
+    @Provides @Singleton fun zeroworldApi(): ZeroworldApiService = Retrofit.Builder().baseUrl("https://zeroworldkorea.com/")
+        .client(OkHttpClient.Builder().addInterceptor(HttpLoggingInterceptor().apply { level = HttpLoggingInterceptor.Level.BASIC }).build())
+        .build().create(ZeroworldApiService::class.java)
 }

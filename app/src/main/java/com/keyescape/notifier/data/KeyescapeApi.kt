@@ -2,7 +2,10 @@ package com.keyescape.notifier.data
 
 import kotlinx.serialization.SerialName
 import kotlinx.serialization.Serializable
+import okhttp3.ResponseBody
+import retrofit2.Response
 import retrofit2.http.Field
+import retrofit2.http.FieldMap
 import retrofit2.http.FormUrlEncoded
 import retrofit2.http.GET
 import retrofit2.http.POST
@@ -18,6 +21,12 @@ interface KeyescapeApiService {
 
     @FormUrlEncoded @POST("controller/run_proc.php")
     suspend fun times(@Field("t") type: String = "get_theme_time", @Field("date") date: String, @Field("zizumNum") branchId: Int, @Field("themeNum") themeNum: Int): TimeResponse
+}
+
+interface ZeroworldApiService {
+    @FormUrlEncoded
+    @POST("core/res/rev.make.sel.php")
+    suspend fun fragment(@FieldMap fields: Map<String, String>): Response<ResponseBody>
 }
 
 @Serializable data class ThemeListResponse(val status: Boolean = false, val msg: String = "", val data: List<ThemeDto> = emptyList())

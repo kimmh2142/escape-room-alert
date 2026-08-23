@@ -7,14 +7,15 @@ import javax.inject.Inject
 import javax.inject.Singleton
 
 enum class Provider(val storageKey: String, val displayName: String) {
-    KEYESCAPE("KEYESCAPE", "키이스케이프");
+    KEYESCAPE("KEYESCAPE", "키이스케이프"),
+    ZEROWORLD("ZEROWORLD", "제로월드");
 
     companion object {
         fun fromStorage(value: String): Provider? = values().firstOrNull { it.storageKey == value }
     }
 }
 
-data class Branch(val id: Int, val name: String, val region: String, val provider: Provider)
+data class Branch(val id: Int, val name: String, val region: String, val provider: Provider, val providerMetadata: String = "")
 
 @Singleton class ProviderBranchCatalog @Inject constructor() {
     // Region labels deliberately do not infer location from a branch name.
@@ -24,7 +25,9 @@ data class Branch(val id: Int, val name: String, val region: String, val provide
         Branch(14, "더오름", "서울 강남", Provider.KEYESCAPE), Branch(16, "우주라이크", "서울 강남", Provider.KEYESCAPE),
         Branch(18, "메모리컴퍼니", "서울 강남", Provider.KEYESCAPE), Branch(19, "LOG_IN 1", "서울 강남", Provider.KEYESCAPE),
         Branch(20, "LOG_IN 2", "서울 강남", Provider.KEYESCAPE), Branch(22, "STATION", "서울 강남", Provider.KEYESCAPE),
-        Branch(23, "후즈데어", "서울 강남", Provider.KEYESCAPE), Branch(9, "키이스케이프 부산점", "부산", Provider.KEYESCAPE), Branch(7, "키이스케이프 전주점", "전주", Provider.KEYESCAPE)
+        Branch(23, "후즈데어", "서울 강남", Provider.KEYESCAPE), Branch(9, "키이스케이프 부산점", "부산", Provider.KEYESCAPE), Branch(7, "키이스케이프 전주점", "전주", Provider.KEYESCAPE),
+        Branch(1, "김포본점", "김포", Provider.ZEROWORLD, "A"), Branch(4, "강남점", "서울 강남", Provider.ZEROWORLD, "A"),
+        Branch(5, "홍대점", "서울 홍대", Provider.ZEROWORLD, "A"), Branch(2, "다이브 건대점", "서울 건대", Provider.ZEROWORLD, "B")
     )
     fun regions() = branches.map { it.region }.distinct()
     fun providers(region: String) = branches.filter { it.region == region }.map { it.provider }.distinct()
@@ -59,5 +62,7 @@ data class Branch(val id: Int, val name: String, val region: String, val provide
     suspend fun deleteGroup(id: String) = dao.deleteGroup(id)
     suspend fun setGroupEnabled(id: String, value: Boolean) = dao.setGroupEnabled(id, value)
     suspend fun updateSlotResult(id: String, availability: String, notified: String, checkedAt: Long) = dao.updateSlotResult(id, availability, notified, checkedAt)
+    suspend fun recordSlotCheck(slotId: String, availability: String, checkedAt: Long, foundEvent: AvailabilityEventEntity, goneEvent: AvailabilityEventEntity): SlotCheckPersistence? = dao.recordSlotCheck(slotId, availability, checkedAt, foundEvent, goneEvent)
+    fun availabilityEvents(): Flow<List<AvailabilityEventEntity>> = dao.observeAvailabilityEvents()
     suspend fun replaceSlots(groupId: String, slots: List<MonitoringSlotEntity>) = dao.replaceSlots(groupId, slots)
 }

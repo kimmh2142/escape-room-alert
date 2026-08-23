@@ -64,7 +64,7 @@ class MainActivity : ComponentActivity() {
     colorScheme = lightColorScheme(primary = Color(0xFF365B66), secondary = Color(0xFF8A5A44)), content = content
 )
 
-private enum class Screen { WELCOME, HOME, SETUP, DETAIL, SETTINGS }
+private enum class Screen { WELCOME, HOME, LOGS, SETUP, DETAIL, SETTINGS }
 
 @Composable fun EscapeNotifierApp() {
     var screen by rememberSaveable { mutableStateOf(Screen.WELCOME) }
@@ -72,7 +72,8 @@ private enum class Screen { WELCOME, HOME, SETUP, DETAIL, SETTINGS }
     var editId by rememberSaveable { mutableStateOf<String?>(null) }
     when (screen) {
         Screen.WELCOME -> WelcomeScreen { screen = Screen.HOME }
-        Screen.HOME -> HomeScreen({ editId = null; screen = Screen.SETUP }, { detailId = it; screen = Screen.DETAIL }, { screen = Screen.SETTINGS })
+        Screen.HOME -> HomeScreen({ editId = null; screen = Screen.SETUP }, { detailId = it; screen = Screen.DETAIL }, { screen = Screen.SETTINGS }, { screen = Screen.LOGS })
+        Screen.LOGS -> AvailabilityLogScreen(onHome = { screen = Screen.HOME })
         Screen.SETUP -> SetupScreen({ editId = null; screen = Screen.HOME }, { editId = null; screen = Screen.HOME }, editId)
         Screen.DETAIL -> detailId?.let { DetailScreen(it, { screen = Screen.HOME }, { editId = it; screen = Screen.SETUP }) }
         Screen.SETTINGS -> SettingsScreen { screen = Screen.HOME }
@@ -110,14 +111,60 @@ private fun summaryMessage(summary: MonitoringCheckSummary): String {
     return "$headline\n$grouped" + if (summary.failedGroupCount > 0) "\n일부 항목 확인 실패" else ""
 }
 
-@Composable private fun HomeScreen(onAdd: () -> Unit, onDetail: (String) -> Unit, onSettings: () -> Unit, vm: HomeViewModel = hiltViewModel()) {
+@Composable private fun HomeScreen(onAdd: () -> Unit, onDetail: (String) -> Unit, onSettings: () -> Unit, onLogs: () -> Unit, vm: HomeViewModel = hiltViewModel()) {
     val groups by vm.groups.collectAsState(); val checkUi by vm.checkUi.collectAsState(); val scope = rememberCoroutineScope(); val snackbar = remember { SnackbarHostState() }
     LaunchedEffect(checkUi.resultMessage) { checkUi.resultMessage?.let { snackbar.showSnackbar(it); vm.consumeResult() } }
     Scaffold(snackbarHost = { SnackbarHost(snackbar) }, topBar = { TopAppBar(title = { Text("방탈출 알리미") }, actions = {
         TextButton(onClick = onSettings) { Text("설정") }
-    }) }, floatingActionButton = { ExtendedFloatingActionButton(onClick = onAdd) { Text("모니터링 추가") } }) { padding ->
+    }) }, bottomBar = { MainNavigation(selectedHome = true, onHome = {}, onLogs = onLogs) }, floatingActionButton = { ExtendedFloatingActionButton(onClick = onAdd) { Text("모니터링 추가") } }) { padding ->
         if (groups.isEmpty()) Column(Modifier.padding(padding).fillMaxSize(), horizontalAlignment = Alignment.CenterHorizontally, verticalArrangement = Arrangement.Center) { Text("등록된 모니터링이 없습니다.", style = MaterialTheme.typography.titleMedium); Spacer(Modifier.height(12.dp)); Button(onClick = onAdd) { Text("첫 모니터링 만들기") } }
         else LazyColumn(Modifier.padding(padding).padding(16.dp), verticalArrangement = Arrangement.spacedBy(10.dp)) { items(groups, key = { it.group.id }) { group -> MonitoringCard(group, checkUi.running, { onDetail(group.group.id) }) { vm.checkNow(group); scope.launch { snackbar.showSnackbar("지금 확인을 시작했습니다.") } } } }
+    }
+}
+
+@Composable private fun MainNavigation(selectedHome: Boolean, onHome: () -> Unit, onLogs: () -> Unit) = NavigationBar {
+    NavigationBarItem(selected = selectedHome, onClick = onHome, icon = {}, label = { Text("홈") })
+    NavigationBarItem(selected = !selectedHome, onClick = onLogs, icon = {}, label = { Text("로그") })
+}
+
+@HiltViewModel class AvailabilityLogViewModel @Inject constructor(repository: MonitoringRepository) : ViewModel() {
+    val events = repository.availabilityEvents().stateIn(viewModelScope, SharingStarted.WhileSubscribed(5_000), emptyList())
+}
+
+@Composable private fun AvailabilityLogScreen(onHome: () -> Unit, vm: AvailabilityLogViewModel = hiltViewModel()) {
+    val events by vm.events.collectAsState()
+    Scaffold(
+        topBar = { TopAppBar(title = { Text("취소표 기록") }) },
+        bottomBar = { MainNavigation(selectedHome = false, onHome = onHome, onLogs = {}) }
+    ) { padding ->
+        if (events.isEmpty()) {
+            Column(
+                Modifier.padding(padding).fillMaxSize().padding(32.dp),
+                horizontalAlignment = Alignment.CenterHorizontally,
+                verticalArrangement = Arrangement.Center
+            ) {
+                Text("아직 취소표 기록이 없어요.", style = MaterialTheme.typography.titleMedium)
+                Spacer(Modifier.height(8.dp))
+                Text("취소표가 발견되거나\n발견된 자리가 다시 사라지면\n여기에 기록됩니다.", textAlign = TextAlign.Center, color = MaterialTheme.colorScheme.onSurfaceVariant)
+            }
+        } else LazyColumn(
+            Modifier.padding(padding).padding(horizontal = 16.dp),
+            contentPadding = PaddingValues(vertical = 16.dp),
+            verticalArrangement = Arrangement.spacedBy(10.dp)
+        ) { items(events, key = { it.id }) { AvailabilityEventCard(it) } }
+    }
+}
+
+@Composable private fun AvailabilityEventCard(event: AvailabilityEventEntity) = Card(Modifier.fillMaxWidth()) {
+    val found = event.eventType == AvailabilityEventType.AVAILABLE_FOUND
+    val eventTime = SimpleDateFormat("M월 d일 HH:mm", Locale.KOREA).format(Date(event.detectedAt))
+    val targetDate = runCatching { LocalDate.parse(event.date).format(DateTimeFormatter.ofPattern("M월 d일", Locale.KOREAN)) }.getOrDefault(event.date)
+    Column(Modifier.padding(16.dp), verticalArrangement = Arrangement.spacedBy(4.dp)) {
+        Text(eventTime, style = MaterialTheme.typography.labelMedium, color = MaterialTheme.colorScheme.onSurfaceVariant)
+        Text(if (found) "취소표 발견" else "취소표 사라짐", style = MaterialTheme.typography.titleMedium, color = if (found) Color(0xFF257942) else MaterialTheme.colorScheme.onSurfaceVariant)
+        Text("${Provider.fromStorage(event.provider)?.displayName ?: event.provider} · ${event.branchName}")
+        Text(event.themeName)
+        Text("$targetDate · ${event.desiredTime}", color = MaterialTheme.colorScheme.onSurfaceVariant)
     }
 }
 
@@ -126,51 +173,46 @@ private fun summaryMessage(summary: MonitoringCheckSummary): String {
     Text(if (group.enabled) "● 모니터링 중" else "○ 일시정지", color = if (group.enabled) Color(0xFF257942) else Color.Gray); Spacer(Modifier.height(8.dp)); Text(group.branchName, style = MaterialTheme.typography.titleMedium, fontWeight = FontWeight.Bold); Text(group.themeName); Spacer(Modifier.height(8.dp)); Text("${groupWithSlots.slots.groupBy { it.date }.size}일 · ${groupWithSlots.slots.size}개 시간"); Text(latest?.let { "마지막 확인: ${SimpleDateFormat("HH:mm", Locale.KOREA).format(Date(it))}" } ?: "아직 확인하지 않았습니다.", style = MaterialTheme.typography.bodySmall); Spacer(Modifier.height(8.dp)); OutlinedButton(enabled = group.enabled && !checking, onClick = onCheck) { Text(if (checking) "확인 중" else "지금 확인") }
 } }
 
-data class SetupState(val region: String = "", val provider: Provider? = null, val branch: Branch? = null, val themes: List<ThemeDto> = emptyList(), val theme: ThemeDto? = null, val editingGroupId: String? = null, val month: YearMonth = YearMonth.now(), val availableStart: LocalDate? = null, val availableEnd: LocalDate? = null, val selectedDates: Set<String> = emptySet(), val slotsByDate: Map<String, List<TimeSlotDto>> = emptyMap(), val selectedTimes: Map<String, Set<String>> = emptyMap(), val loadingDates: Set<String> = emptySet(), val loading: Boolean = false, val themeLoading: Boolean = false, val themesLoaded: Boolean = false, val themeError: String? = null, val error: String? = null)
+data class SetupState(val region: String = "", val provider: Provider? = null, val branch: Branch? = null, val themes: List<ThemeDto> = emptyList(), val theme: ThemeDto? = null, val editingGroupId: String? = null, val month: YearMonth = YearMonth.now(), val availableDates: Set<String> = emptySet(), val selectedDates: Set<String> = emptySet(), val slotsByDate: Map<String, List<TimeSlotDto>> = emptyMap(), val selectedTimes: Map<String, Set<String>> = emptyMap(), val loadingDates: Set<String> = emptySet(), val loading: Boolean = false, val themeLoading: Boolean = false, val themesLoaded: Boolean = false, val themeError: String? = null, val error: String? = null)
 
-@HiltViewModel class SetupViewModel @Inject constructor(private val catalog: ProviderBranchCatalog, private val api: KeyescapeRepository, private val monitoring: MonitoringRepository) : ViewModel() {
+@HiltViewModel class SetupViewModel @Inject constructor(private val catalog: ProviderBranchCatalog, private val providers: ProviderRepositoryResolver, private val monitoring: MonitoringRepository) : ViewModel() {
     private val _state = MutableStateFlow(SetupState()); val state = _state.asStateFlow(); val regions = catalog.regions(); fun providers(region: String) = catalog.providers(region); fun branches(region: String, provider: Provider) = catalog.branches(region, provider)
     fun chooseRegion(region: String) { _state.value = SetupState(region = region) }
     fun chooseProvider(provider: Provider) { _state.update { it.copy(provider = provider, branch = null, themes = emptyList(), theme = null, selectedDates = emptySet(), slotsByDate = emptyMap(), selectedTimes = emptyMap(), loading = false, themeLoading = false, themesLoaded = false, themeError = null, error = null) } }
     fun chooseBranch(branch: Branch) = viewModelScope.launch {
         _state.update { it.copy(branch = branch, theme = null, themes = emptyList(), selectedDates = emptySet(), slotsByDate = emptyMap(), selectedTimes = emptyMap(), loading = false, themeLoading = true, themesLoaded = false, themeError = null, error = null) }
-        themesFor(branch).onSuccess { themes ->
+        providers.get(branch.provider).themes(branch).onSuccess { themes ->
             if (BuildConfig.DEBUG) Log.d("KeyescapeThemes", "Theme ViewModel state: branchId=${branch.id}, count=${themes.size}")
+            if (BuildConfig.DEBUG && branch.provider == Provider.ZEROWORLD) themes.forEach { theme -> Log.d("ZeroworldApi", "ViewModel theme: themeId=${theme.themeNum}, themeName=${theme.name}") }
             _state.update { it.copy(themes = themes, themeLoading = false, themesLoaded = true) }
         }.onFailure { error ->
             _state.update { it.copy(themeLoading = false, themesLoaded = true, themeError = error.message ?: "테마를 불러오지 못했습니다.") }
         }
     }
     fun retryThemes() { _state.value.branch?.let(::chooseBranch) }
-    fun chooseTheme(theme: ThemeDto) = viewModelScope.launch { val provider = _state.value.provider ?: return@launch; _state.update { it.copy(theme = theme, selectedDates = emptySet(), slotsByDate = emptyMap(), selectedTimes = emptyMap(), loading = true, error = null) }; themeDateFor(provider, theme.infoNum).onSuccess { response -> val today = runCatching { LocalDate.parse(response.calendarData?.today) }.getOrDefault(LocalDate.now()); val days = response.data?.doing?.takeIf { it > 0 } ?: theme.doing.coerceAtLeast(1); _state.update { it.copy(month = YearMonth.from(today), availableStart = today, availableEnd = today.plusDays((days - 1).toLong()), loading = false) } }.onFailure(::fail) }
+    fun chooseTheme(theme: ThemeDto) { _state.update { it.copy(theme = theme, selectedDates = emptySet(), slotsByDate = emptyMap(), selectedTimes = emptyMap(), availableDates = emptySet(), loading = true, error = null) }; loadCalendar(YearMonth.now()) }
     fun loadForEdit(groupId: String) = viewModelScope.launch {
         if (_state.value.editingGroupId == groupId) return@launch
         val saved = monitoring.group(groupId).first() ?: return@launch
         val group = saved.group
         val provider = Provider.fromStorage(group.provider) ?: Provider.KEYESCAPE
-        val branch = catalog.branches.firstOrNull { it.id == group.branchId && it.provider == provider } ?: Branch(group.branchId, group.branchName, "기존 지점", provider)
+        val branch = catalog.branches.firstOrNull { it.id == group.branchId && it.provider == provider } ?: Branch(group.branchId, group.branchName, "기존 지점", provider, group.providerMetadata)
         val theme = ThemeDto(group.themeInfoNum, group.themeNum, group.branchId, group.themeName)
         val selectedTimes = saved.slots.groupBy { it.date }.mapValues { (_, slots) -> slots.map { it.desiredTime }.toSet() }
         _state.value = SetupState(region = branch.region, provider = provider, branch = branch, themes = listOf(theme), theme = theme, editingGroupId = groupId, selectedDates = selectedTimes.keys, selectedTimes = selectedTimes, loading = true)
-        themeDateFor(provider, theme.infoNum).onSuccess { response ->
-            val today = runCatching { LocalDate.parse(response.calendarData?.today) }.getOrDefault(LocalDate.now())
-            val days = response.data?.doing?.takeIf { it > 0 } ?: theme.doing.coerceAtLeast(1)
-            _state.update { it.copy(month = YearMonth.from(today), availableStart = today, availableEnd = today.plusDays((days - 1).toLong()), loading = false) }
-            selectedTimes.keys.forEach(::loadSlots)
-        }.onFailure(::fail)
+        loadCalendar(YearMonth.now(), selectedTimes.keys)
     }
-    fun changeMonth(delta: Long) { _state.update { it.copy(month = it.month.plusMonths(delta)) } }
+    fun changeMonth(delta: Long) { loadCalendar(_state.value.month.plusMonths(delta)) }
     fun toggleDate(date: LocalDate) { val s = _state.value; val key = date.toString(); if (!isSelectable(date, s)) return; if (key in s.selectedDates) _state.update { it.copy(selectedDates = it.selectedDates - key, selectedTimes = it.selectedTimes - key) } else { _state.update { it.copy(selectedDates = it.selectedDates + key) }; if (key !in s.slotsByDate) loadSlots(key) } }
-    private fun loadSlots(date: String) = viewModelScope.launch { val s = _state.value; val provider = s.provider ?: return@launch; val branch = s.branch ?: return@launch; val theme = s.theme ?: return@launch; _state.update { it.copy(loadingDates = it.loadingDates + date) }; timesFor(provider, branch.id, theme.themeNum, date).onSuccess { slots -> _state.update { it.copy(slotsByDate = it.slotsByDate + (date to slots), loadingDates = it.loadingDates - date) } }.onFailure { error -> _state.update { it.copy(loadingDates = it.loadingDates - date, error = error.message ?: "시간표를 불러오지 못했습니다.") } } }
+    private fun loadSlots(date: String) = viewModelScope.launch { val s = _state.value; val branch = s.branch ?: return@launch; val theme = s.theme ?: return@launch; _state.update { it.copy(loadingDates = it.loadingDates + date) }; providers.get(branch.provider).times(branch, theme, date).onSuccess { slots -> _state.update { it.copy(slotsByDate = it.slotsByDate + (date to slots), loadingDates = it.loadingDates - date) } }.onFailure { error -> _state.update { it.copy(loadingDates = it.loadingDates - date, error = error.message ?: "시간표를 불러오지 못했습니다.") } } }
     fun toggleTime(date: String, time: String) { _state.update { state -> val map = state.selectedTimes.toMutableMap(); val values = map[date].orEmpty().toMutableSet(); if (!values.add(time)) values.remove(time); map[date] = values; state.copy(selectedTimes = map) } }
-    suspend fun persist(): Boolean { val s = _state.value; val provider = s.provider ?: return false; val branch = s.branch ?: return false; val theme = s.theme ?: return false; if (s.selectedTimes.values.flatten().isEmpty()) return false; val group = MonitoringGroupEntity(s.editingGroupId ?: UUID.randomUUID().toString(), provider.storageKey, branch.id, branch.name, theme.themeNum, theme.infoNum, theme.name); val slots = s.selectedTimes.flatMap { (date, times) -> times.map { time -> MonitoringSlotEntity(UUID.randomUUID().toString(), group.id, date, time) } }; if (s.editingGroupId == null) monitoring.createOrAppend(group, slots) else monitoring.replaceSlots(group.id, slots); return true }
+    suspend fun persist(): Boolean { val s = _state.value; val provider = s.provider ?: return false; val branch = s.branch ?: return false; val theme = s.theme ?: return false; if (s.selectedTimes.values.flatten().isEmpty()) return false; val group = MonitoringGroupEntity(s.editingGroupId ?: UUID.randomUUID().toString(), provider.storageKey, branch.providerMetadata, branch.id, branch.name, theme.themeNum, theme.infoNum, theme.name); val slots = s.selectedTimes.flatMap { (date, times) -> times.map { time -> MonitoringSlotEntity(UUID.randomUUID().toString(), group.id, date, time) } }; if (s.editingGroupId == null) monitoring.createOrAppend(group, slots) else monitoring.replaceSlots(group.id, slots); return true }
+    fun reservationUrl(): String? { val s = _state.value; val branch = s.branch ?: return null; val theme = s.theme ?: return null; return providers.get(branch.provider).reservationUrl(branch, theme) }
     private fun fail(error: Throwable) { _state.update { it.copy(loading = false, error = error.message ?: "네트워크 오류가 발생했습니다. 다시 시도해 주세요.") } }
-    private suspend fun themesFor(branch: Branch): Result<List<ThemeDto>> = when (branch.provider) { Provider.KEYESCAPE -> api.themes(branch.id) }
-    private suspend fun themeDateFor(provider: Provider, infoNum: Int): Result<ThemeDateResponse> = when (provider) { Provider.KEYESCAPE -> api.themeDate(infoNum) }
-    private suspend fun timesFor(provider: Provider, branchId: Int, themeNum: Int, date: String): Result<List<TimeSlotDto>> = when (provider) { Provider.KEYESCAPE -> api.times(branchId, themeNum, date) }
+    private fun loadCalendar(month: YearMonth, loadSlotsAfter: Set<String> = emptySet()) = viewModelScope.launch { val s = _state.value; val branch = s.branch ?: return@launch; val theme = s.theme ?: return@launch; providers.get(branch.provider).calendar(branch, theme, month).onSuccess { calendar -> _state.update { it.copy(month = month, availableDates = it.availableDates + calendar.dates, loading = false) }; loadSlotsAfter.forEach(::loadSlots) }.onFailure(::fail) }
 }
 
-private fun isSelectable(date: LocalDate, state: SetupState) = state.availableStart?.let { start -> date >= start && date <= (state.availableEnd ?: start) } == true
+private fun isSelectable(date: LocalDate, state: SetupState) = date.toString() in state.availableDates
 
 @Composable private fun SetupScreen(onBack: () -> Unit, onDone: () -> Unit, editGroupId: String?, vm: SetupViewModel = hiltViewModel()) {
     val state by vm.state.collectAsState(); val context = LocalContext.current; val scope = rememberCoroutineScope(); var availableSlot by remember { mutableStateOf<TimeSlotDto?>(null) }
@@ -185,16 +227,19 @@ private fun isSelectable(date: LocalDate, state: SetupState) = state.availableSt
                 state.themeLoading -> item { Row(verticalAlignment = Alignment.CenterVertically, horizontalArrangement = Arrangement.spacedBy(12.dp)) { CircularProgressIndicator(Modifier.size(22.dp), strokeWidth = 2.dp); Text("테마를 불러오는 중...") } }
                 state.themeError != null -> item { Column(verticalArrangement = Arrangement.spacedBy(8.dp)) { Text("테마를 불러오지 못했습니다.\n다시 시도해주세요.", color = MaterialTheme.colorScheme.error); OutlinedButton(onClick = vm::retryThemes) { Text("다시 시도") } } }
                 state.themesLoaded && state.themes.isEmpty() -> item { Text("등록된 테마가 없습니다.") }
-                else -> item { FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { state.themes.forEach { theme -> FilterChip(selected = state.theme?.infoNum == theme.infoNum, onClick = { vm.chooseTheme(theme) }, label = { Text(theme.name) }) } } }
+                else -> item {
+                    if (BuildConfig.DEBUG && state.branch?.provider == Provider.ZEROWORLD) LaunchedEffect(state.themes) { state.themes.forEach { theme -> Log.d("ZeroworldApi", "Compose theme: themeId=${theme.themeNum}, themeName=${theme.name}") } }
+                    FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { state.themes.forEach { theme -> FilterChip(selected = state.theme?.infoNum == theme.infoNum, onClick = { vm.chooseTheme(theme) }, label = { Text(theme.name) }) } }
+                }
             }
         }
-        if (state.theme != null && state.availableStart != null) item { Text("5. 날짜 선택", style = MaterialTheme.typography.titleMedium); Text("여러 날짜를 선택할 수 있습니다.", style = MaterialTheme.typography.bodySmall); MonthCalendar(state, vm) }
+        if (state.theme != null && state.availableDates.isNotEmpty()) item { Text("5. 날짜 선택", style = MaterialTheme.typography.titleMedium); Text("여러 날짜를 선택할 수 있습니다.", style = MaterialTheme.typography.bodySmall); MonthCalendar(state, vm) }
         if (state.selectedDates.isNotEmpty()) item { Text("6. 날짜별 시간 선택", style = MaterialTheme.typography.titleMedium) }
         items(state.selectedDates.sorted(), key = { it }) { date -> TimeSelectionCard(date, state, vm) { availableSlot = it } }
         state.error?.let { item { Text(it, color = MaterialTheme.colorScheme.error) } }; if (state.loading) item { LinearProgressIndicator(Modifier.fillMaxWidth()) }
         if (state.selectedTimes.values.flatten().isNotEmpty()) item { Button(onClick = { scope.launch { if (vm.persist()) { MonitoringScheduler.ensureScheduled(context); onDone() } } }, modifier = Modifier.fillMaxWidth()) { Text(if (editGroupId == null) "선택한 시간 모니터링 등록" else "수정 저장") } }
     } }
-    availableSlot?.let { slot -> AlertDialog(onDismissRequest = { availableSlot = null }, title = { Text("현재 예약 가능한 자리입니다.") }, text = { Text("${slot.displayTime}${slot.saleText}은 지금 예약할 수 있습니다.") }, confirmButton = { TextButton(onClick = { val s = state; context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.keyescape.com/reservation1.php?zizum_num=${s.branch?.id}&theme_num=${s.theme?.themeNum}&theme_info_num=${s.theme?.infoNum}"))); availableSlot = null }) { Text("예약 사이트 열기") } }, dismissButton = { TextButton(onClick = { availableSlot = null }) { Text("닫기") } }) }
+    availableSlot?.let { slot -> AlertDialog(onDismissRequest = { availableSlot = null }, title = { Text("현재 예약 가능한 자리입니다.") }, text = { Text("${slot.displayTime}${slot.saleText}은 지금 예약할 수 있습니다.") }, confirmButton = { TextButton(onClick = { vm.reservationUrl()?.let { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(it))) }; availableSlot = null }) { Text("예약 사이트 열기") } }, dismissButton = { TextButton(onClick = { availableSlot = null }) { Text("닫기") } }) }
 }
 
 @Composable private fun ChoiceFlowRow(options: List<String>, selected: String, onChoose: (String) -> Unit) = FlowRow(horizontalArrangement = Arrangement.spacedBy(8.dp), verticalArrangement = Arrangement.spacedBy(8.dp)) { options.forEach { option -> FilterChip(selected = selected == option, onClick = { onChoose(option) }, label = { Text(option) }) } }
@@ -254,7 +299,7 @@ private fun isSelectable(date: LocalDate, state: SetupState) = state.availableSt
     }
 }
 
-@HiltViewModel class DetailViewModel @Inject constructor(private val repository: MonitoringRepository, private val checkTargets: CheckMonitoringTargetsUseCase) : ViewModel() { private val _result = MutableStateFlow<String?>(null); val result = _result.asStateFlow(); fun group(id: String) = repository.group(id); fun setEnabled(id: String, enabled: Boolean) = viewModelScope.launch { repository.setGroupEnabled(id, enabled) }; fun delete(id: String, done: () -> Unit) = viewModelScope.launch { repository.deleteGroup(id); done() }; fun checkNow(group: MonitoringGroupWithSlots) = viewModelScope.launch { _result.value = summaryMessage(checkTargets.check(listOf(group))) }; fun consumeResult() { _result.value = null } }
+@HiltViewModel class DetailViewModel @Inject constructor(private val repository: MonitoringRepository, private val checkTargets: CheckMonitoringTargetsUseCase, private val providers: ProviderRepositoryResolver) : ViewModel() { private val _result = MutableStateFlow<String?>(null); val result = _result.asStateFlow(); fun group(id: String) = repository.group(id); fun setEnabled(id: String, enabled: Boolean) = viewModelScope.launch { repository.setGroupEnabled(id, enabled) }; fun delete(id: String, done: () -> Unit) = viewModelScope.launch { repository.deleteGroup(id); done() }; fun checkNow(group: MonitoringGroupWithSlots) = viewModelScope.launch { _result.value = summaryMessage(checkTargets.check(listOf(group))) }; fun reservationUrl(group: MonitoringGroupEntity): String? { val provider = Provider.fromStorage(group.provider) ?: return null; return providers.get(provider).reservationUrl(Branch(group.branchId, group.branchName, "", provider, group.providerMetadata), ThemeDto(group.themeInfoNum, group.themeNum, name = group.themeName)) }; fun consumeResult() { _result.value = null } }
 
 @Composable private fun DetailScreen(id: String, onBack: () -> Unit, onEdit: (String) -> Unit, vm: DetailViewModel = hiltViewModel()) {
     val groupWithSlots by vm.group(id).collectAsState(initial = null)
@@ -274,7 +319,7 @@ private fun isSelectable(date: LocalDate, state: SetupState) = state.availableSt
                 Button(enabled = group.enabled, onClick = { vm.checkNow(groupValue) }) { Text("지금 확인") }
                 Button(onClick = { vm.setEnabled(group.id, !group.enabled) }) { Text(if (group.enabled) "모니터링 일시정지" else "다시 시작") }
                 OutlinedButton(onClick = { onEdit(group.id) }) { Text("조건 수정") }
-                OutlinedButton(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse("https://www.keyescape.com/reservation1.php?zizum_num=${group.branchId}&theme_num=${group.themeNum}&theme_info_num=${group.themeInfoNum}"))) }) { Text("예약 사이트 열기") }
+                OutlinedButton(onClick = { vm.reservationUrl(group)?.let { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(it))) } }) { Text("예약 사이트 열기") }
                 TextButton(onClick = { vm.delete(group.id, onBack) }) { Text("삭제", color = MaterialTheme.colorScheme.error) }
             }
         }
